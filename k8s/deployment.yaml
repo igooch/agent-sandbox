@@ -68,4 +68,7 @@ spec:
       serviceAccountName: agent-sandbox-controller
       containers:
       - name: agent-sandbox-controller
-        image: ko://sigs.k8s.io/agent-sandbox/cmd/agent-sandbox-controller # placeholder value, replaced by deployment scripts
+        image: us-docker.pkg.dev/gke-ai-eco-dev/agent-sandbox/agent-sandbox-controller:v20251031-dca369b-dirty # placeholder value, replaced by deployment scripts
+        imagePullPolicy: Always
+        args:
+        - "--extensions=true"

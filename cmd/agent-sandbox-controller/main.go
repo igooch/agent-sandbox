@@ -56,6 +56,8 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	setupLog.Info("EXTENSIONS_FLAG", extensions)
+
 	scheme := controllers.Scheme
 	if extensions {
 		utilruntime.Must(extensionsv1alpha1.AddToScheme(scheme))

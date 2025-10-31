@@ -40,7 +40,7 @@ def create_buildx_builder_if_not_exists():
 
 
 def build_and_push_image_with_docker_buildx(args, service_name, srcdir, dockerfile_path):
-    platforms = "linux/amd64,linux/arm64"
+    platforms = "linux/amd64"
     build_cmd = [
         "docker",
         "buildx",
