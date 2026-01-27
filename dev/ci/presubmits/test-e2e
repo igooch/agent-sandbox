@@ -37,6 +37,22 @@ def main():
     result = subprocess.run([f"{repo_root}/dev/tools/deploy-to-kube", "--image-prefix", "kind.local/"])
     if result.returncode != 0:
         return result.returncode
+        # Enable extensions if requested via environment variable
+    if os.getenv("EXTENSIONS") == "true":
+        print("🔧 Patching controller to enable extensions...")
+        patch_json = '{"spec": {"template": {"spec": {"containers": [{"name": "agent-sandbox-controller", "args": ["--extensions=true"]}]}}}}'
+        # Using kubeconfig from create-kind-cluster
+        patch_cmd = [
+            "kubectl", "--kubeconfig", f"{repo_root}/bin/KUBECONFIG",
+            "patch", "statefulset", "agent-sandbox-controller",
+            "-n", "agent-sandbox-system",
+            "-p", patch_json
+        ]
+        result = subprocess.run(patch_cmd)
+        if result.returncode != 0:
+            print("❌ Failed to patch controller for extensions.")
+            return result.returncode
+
     result = subprocess.run([f"{repo_root}/dev/tools/deploy-cloud-provider"])
     if result.returncode != 0:
         return result.returncode
