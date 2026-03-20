@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sort"
 	"time"
 
@@ -342,81 +343,77 @@ func (r *SandboxClaimReconciler) computeAndSetStatus(claim *extensionsv1alpha1.S
 func (r *SandboxClaimReconciler) adoptSandboxFromCandidates(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim, candidates []*v1alpha1.Sandbox) (*v1alpha1.Sandbox, error) {
 	log := log.FromContext(ctx)
 
-	// Sort: ready sandboxes first, then by creation time (oldest first)
-	sort.Slice(candidates, func(i, j int) bool {
-		iReady := isSandboxReady(candidates[i])
-		jReady := isSandboxReady(candidates[j])
-		if iReady != jReady {
-			return iReady
-		}
-		return candidates[i].CreationTimestamp.Before(&candidates[j].CreationTimestamp)
-	})
-
-	var readyCandidates []*v1alpha1.Sandbox
-	for _, c := range candidates {
-		if isSandboxReady(c) {
-			readyCandidates = append(readyCandidates, c)
-		}
-	}
-	if len(readyCandidates) == 0 {
-		log.Info("No ready warm pool candidates, falling through to cold start",
-			"totalCandidates", len(candidates))
+	if len(candidates) == 0 {
+		log.Info("No ready warm pool candidates, falling through to cold start")
 		return nil, nil
 	}
 
-	adopted := readyCandidates[0]
-	log.Info("Adopting sandbox from warm pool", "sandbox", adopted.Name)
+	// Shuffle the candidates to randomly select one, preventing multiple workers from constantly fighting for the first one.
+	rand.New(rand.NewSource(time.Now().UnixNano())).Shuffle(len(candidates), func(i, j int) {
+		candidates[i], candidates[j] = candidates[j], candidates[i]
+	})
 
-	// Remove warm pool labels so the sandbox no longer appears in warm pool queries
-	delete(adopted.Labels, warmPoolSandboxLabel)
-	delete(adopted.Labels, sandboxTemplateRefHash)
+	for _, adopted := range candidates {
+		log.Info("Attempting to adopt sandbox from warm pool", "sandbox", adopted.Name)
 
-	// Extract pool name from owner reference before clearing
-	poolName := "none"
-	if controllerRef := metav1.GetControllerOf(adopted); controllerRef != nil {
-		poolName = controllerRef.Name
+		// Remove warm pool labels so the sandbox no longer appears in warm pool queries
+		delete(adopted.Labels, warmPoolSandboxLabel)
+		delete(adopted.Labels, sandboxTemplateRefHash)
+
+		// Extract pool name from owner reference before clearing
+		poolName := "none"
+		if controllerRef := metav1.GetControllerOf(adopted); controllerRef != nil {
+			poolName = controllerRef.Name
+		}
+
+		// Transfer ownership from SandboxWarmPool to SandboxClaim
+		adopted.OwnerReferences = nil
+		if err := controllerutil.SetControllerReference(claim, adopted, r.Scheme); err != nil {
+			return nil, fmt.Errorf("failed to set controller reference on adopted sandbox: %w", err)
+		}
+
+		// Propagate trace context from claim
+		if adopted.Annotations == nil {
+			adopted.Annotations = make(map[string]string)
+		}
+		if tc, ok := claim.Annotations[asmetrics.TraceContextAnnotation]; ok {
+			adopted.Annotations[asmetrics.TraceContextAnnotation] = tc
+		}
+
+		// Add sandbox ID label to pod template for NetworkPolicy targeting
+		if adopted.Spec.PodTemplate.ObjectMeta.Labels == nil {
+			adopted.Spec.PodTemplate.ObjectMeta.Labels = make(map[string]string)
+		}
+		adopted.Spec.PodTemplate.ObjectMeta.Labels[extensionsv1alpha1.SandboxIDLabel] = string(claim.UID)
+
+		// Update uses optimistic concurrency (resourceVersion) so concurrent
+		// claims racing to adopt the same sandbox will conflict and retry.
+		if err := r.Update(ctx, adopted); err != nil {
+			if k8errors.IsConflict(err) || k8errors.IsNotFound(err) {
+				log.Info("Conflict or not found error when adopting sandbox, skipping to next", "sandbox", adopted.Name, "err", err.Error())
+				continue
+			}
+			log.Error(err, "Failed to update adopted sandbox")
+			return nil, err
+		}
+
+		log.Info("Successfully adopted sandbox from warm pool", "sandbox", adopted.Name, "claim", claim.Name)
+
+		if r.Recorder != nil {
+			r.Recorder.Event(claim, corev1.EventTypeNormal, "SandboxAdopted", fmt.Sprintf("Adopted warm pool Sandbox %q", adopted.Name))
+		}
+
+		podCondition := "not_ready"
+		if isSandboxReady(adopted) {
+			podCondition = "ready"
+		}
+		asmetrics.RecordSandboxClaimCreation(claim.Namespace, claim.Spec.TemplateRef.Name, asmetrics.LaunchTypeWarm, poolName, podCondition)
+
+		return adopted, nil
 	}
 
-	// Transfer ownership from SandboxWarmPool to SandboxClaim
-	adopted.OwnerReferences = nil
-	if err := controllerutil.SetControllerReference(claim, adopted, r.Scheme); err != nil {
-		return nil, fmt.Errorf("failed to set controller reference on adopted sandbox: %w", err)
-	}
-
-	// Propagate trace context from claim
-	if adopted.Annotations == nil {
-		adopted.Annotations = make(map[string]string)
-	}
-	if tc, ok := claim.Annotations[asmetrics.TraceContextAnnotation]; ok {
-		adopted.Annotations[asmetrics.TraceContextAnnotation] = tc
-	}
-
-	// Add sandbox ID label to pod template for NetworkPolicy targeting
-	if adopted.Spec.PodTemplate.ObjectMeta.Labels == nil {
-		adopted.Spec.PodTemplate.ObjectMeta.Labels = make(map[string]string)
-	}
-	adopted.Spec.PodTemplate.ObjectMeta.Labels[extensionsv1alpha1.SandboxIDLabel] = string(claim.UID)
-
-	// Update uses optimistic concurrency (resourceVersion) so concurrent
-	// claims racing to adopt the same sandbox will conflict and retry.
-	if err := r.Update(ctx, adopted); err != nil {
-		log.Error(err, "Failed to update adopted sandbox")
-		return nil, err
-	}
-
-	log.Info("Successfully adopted sandbox from warm pool", "sandbox", adopted.Name, "claim", claim.Name)
-
-	if r.Recorder != nil {
-		r.Recorder.Event(claim, corev1.EventTypeNormal, "SandboxAdopted", fmt.Sprintf("Adopted warm pool Sandbox %q", adopted.Name))
-	}
-
-	podCondition := "not_ready"
-	if isSandboxReady(adopted) {
-		podCondition = "ready"
-	}
-	asmetrics.RecordSandboxClaimCreation(claim.Namespace, claim.Spec.TemplateRef.Name, asmetrics.LaunchTypeWarm, poolName, podCondition)
-
-	return adopted, nil
+	log.Info("Failed to adopt any sandbox after checking all candidates")
+	return nil, nil // Return nil, nil to fall completely to cold start
 }
 
 // isSandboxReady checks if a sandbox has Ready=True condition
@@ -578,11 +575,14 @@ func (r *SandboxClaimReconciler) getOrCreateSandbox(ctx context.Context, claim *
 		if sb.Labels[sandboxTemplateRefHash] != templateHash {
 			continue
 		}
-		controllerRef := metav1.GetControllerOf(sb)
-		if controllerRef != nil && controllerRef.Kind != "SandboxWarmPool" {
+		if controllerRef := metav1.GetControllerOf(sb); controllerRef == nil || controllerRef.Kind != "SandboxWarmPool" {
 			continue
 		}
-		adoptionCandidates = append(adoptionCandidates, sb)
+
+		// Only consider sandboxes that are fully ready to optimize adoption speed
+		if isSandboxReady(sb) {
+			adoptionCandidates = append(adoptionCandidates, sb)
+		}
 	}
 
 	// Try to adopt from warm pool

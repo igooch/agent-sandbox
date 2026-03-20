@@ -838,14 +838,14 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name                    string
-		existingObjects         []client.Object
-		expectSandboxAdoption   bool
-		expectedAdoptedSandbox  string
-		expectNewSandboxCreated bool
+		name                     string
+		existingObjects          []client.Object
+		expectSandboxAdoption    bool
+		expectedAdoptedSandboxes []string
+		expectNewSandboxCreated  bool
 	}{
 		{
-			name: "adopts oldest ready sandbox from warm pool",
+			name: "adopts any ready sandbox from warm pool",
 			existingObjects: []client.Object{
 				template,
 				claim,
@@ -853,9 +853,9 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 				createWarmPoolSandbox("pool-sb-2", metav1.Time{Time: metav1.Now().Add(-1800 * time.Second)}, true),
 				createWarmPoolSandbox("pool-sb-3", metav1.Now(), true),
 			},
-			expectSandboxAdoption:   true,
-			expectedAdoptedSandbox:  "pool-sb-1",
-			expectNewSandboxCreated: false,
+			expectSandboxAdoption:    true,
+			expectedAdoptedSandboxes: []string{"pool-sb-1", "pool-sb-2", "pool-sb-3"},
+			expectNewSandboxCreated:  false,
 		},
 		{
 			name: "creates new sandbox when no warm pool sandboxes exist",
@@ -874,9 +874,9 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 				createSandboxWithDifferentController("other-sb-1"),
 				createWarmPoolSandbox("pool-sb-1", metav1.Now(), true),
 			},
-			expectSandboxAdoption:   true,
-			expectedAdoptedSandbox:  "pool-sb-1",
-			expectNewSandboxCreated: false,
+			expectSandboxAdoption:    true,
+			expectedAdoptedSandboxes: []string{"pool-sb-1"},
+			expectNewSandboxCreated:  false,
 		},
 		{
 			name: "skips sandboxes being deleted",
@@ -886,9 +886,9 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 				createDeletingSandbox("deleting-sb"),
 				createWarmPoolSandbox("pool-sb-1", metav1.Now(), true),
 			},
-			expectSandboxAdoption:   true,
-			expectedAdoptedSandbox:  "pool-sb-1",
-			expectNewSandboxCreated: false,
+			expectSandboxAdoption:    true,
+			expectedAdoptedSandboxes: []string{"pool-sb-1"},
+			expectNewSandboxCreated:  false,
 		},
 		{
 			name: "creates new sandbox when only ineligible warm pool sandboxes exist",
@@ -910,9 +910,9 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 				createWarmPoolSandbox("middle-ready", metav1.Time{Time: metav1.Now().Add(-1 * time.Hour)}, true),
 				createWarmPoolSandbox("young-ready", metav1.Now(), true),
 			},
-			expectSandboxAdoption:   true,
-			expectedAdoptedSandbox:  "middle-ready",
-			expectNewSandboxCreated: false,
+			expectSandboxAdoption:    true,
+			expectedAdoptedSandboxes: []string{"middle-ready", "young-ready"},
+			expectNewSandboxCreated:  false,
 		},
 		{
 			name: "cold starts when all warm pool sandboxes are non-ready",
@@ -959,12 +959,23 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 			if tc.expectSandboxAdoption {
 				// Verify the adopted sandbox has correct labels and owner reference
 				var adoptedSandbox sandboxv1alpha1.Sandbox
-				err = fakeClient.Get(ctx, types.NamespacedName{
-					Name:      tc.expectedAdoptedSandbox,
-					Namespace: "default",
-				}, &adoptedSandbox)
-				if err != nil {
-					t.Fatalf("failed to get adopted sandbox: %v", err)
+				var err error
+				adopted := false
+				for _, expectedName := range tc.expectedAdoptedSandboxes {
+					err = fakeClient.Get(ctx, types.NamespacedName{
+						Name:      expectedName,
+						Namespace: "default",
+					}, &adoptedSandbox)
+					if err == nil {
+						// Check if it was actually adopted by the claim
+						if _, exists := adoptedSandbox.Labels[warmPoolSandboxLabel]; !exists {
+							adopted = true
+							break
+						}
+					}
+				}
+				if !adopted {
+					t.Fatalf("failed to get any of expected adopted sandboxes: %v. last err: %v", tc.expectedAdoptedSandboxes, err)
 				}
 
 				// 1. Verify warm pool labels were removed
