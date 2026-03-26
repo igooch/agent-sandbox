@@ -95,10 +95,9 @@ func init() {
 	metrics.Registry.MustRegister(SandboxClaimCreationTotal)
 }
 
-// RecordClaimStartupLatency records the duration since the provided start time.
-func RecordClaimStartupLatency(startTime time.Time, launchType, templateName string) {
-	duration := float64(time.Since(startTime).Milliseconds())
-	ClaimStartupLatency.WithLabelValues(launchType, templateName).Observe(duration)
+// RecordClaimStartupLatency records the duration from SandboxClaim creation to Ready state.
+func RecordClaimStartupLatency(latency time.Duration, launchType, templateName string) {
+	ClaimStartupLatency.WithLabelValues(launchType, templateName).Observe(float64(latency.Milliseconds()))
 }
 
 // RecordSandboxCreationLatency records the measured latency duration for a sandbox creation.
