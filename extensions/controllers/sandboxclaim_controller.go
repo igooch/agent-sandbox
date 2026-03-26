@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -51,6 +52,7 @@ type SandboxClaimReconciler struct {
 	Recorder                record.EventRecorder
 	Tracer                  asmetrics.Instrumenter
 	MaxConcurrentReconciles int
+	inFlightAdoptions sync.Map
 }
 
 //+kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxclaims,verbs=get;list;watch;create;update;patch;delete
@@ -375,62 +377,84 @@ func (r *SandboxClaimReconciler) adoptSandboxFromCandidates(ctx context.Context,
 		currIndex := (startIndex + i) % n
 		adopted := candidates[currIndex]
 
-		// Extract pool name from owner reference before clearing
-		poolName := "none"
-		if controllerRef := metav1.GetControllerOf(adopted); controllerRef != nil {
-			poolName = controllerRef.Name
+		// ATOMIC PRE-CLAIM: Use the in-flight map to avoid API server conflicts when multiple workers
+		// are racing for the same sandboxes. This prevents local workers from wasting API quota on
+		// updates that we know would fail due to local concurrency.
+		if _, inProgress := r.inFlightAdoptions.LoadOrStore(adopted.Name, struct{}{}); inProgress {
+			continue
 		}
 
-		log.Info(fmt.Sprintf("Attempting sandbox adoption: sandbox=%s, pool=%s", adopted.Name, poolName))
+		// Wrap the adoption logic in a closure to ensure the local lock is
+		// released immediately after the API call via defer, preventing
+		// the map from growing indefinitely.
+		adoptedSandbox, err := func() (*v1alpha1.Sandbox, error) {
+			defer r.inFlightAdoptions.Delete(adopted.Name)
 
-		// Remove warm pool labels so the sandbox no longer appears in warm pool queries
-		delete(adopted.Labels, warmPoolSandboxLabel)
-		delete(adopted.Labels, sandboxTemplateRefHash)
-
-		// Transfer ownership from SandboxWarmPool to SandboxClaim
-		adopted.OwnerReferences = nil
-		if err := controllerutil.SetControllerReference(claim, adopted, r.Scheme); err != nil {
-			return nil, fmt.Errorf("failed to set controller reference on adopted sandbox: %w", err)
-		}
-
-		// Propagate trace context from claim
-		if adopted.Annotations == nil {
-			adopted.Annotations = make(map[string]string)
-		}
-		if tc, ok := claim.Annotations[asmetrics.TraceContextAnnotation]; ok {
-			adopted.Annotations[asmetrics.TraceContextAnnotation] = tc
-		}
-
-		// Add sandbox ID label to pod template for NetworkPolicy targeting
-		if adopted.Spec.PodTemplate.ObjectMeta.Labels == nil {
-			adopted.Spec.PodTemplate.ObjectMeta.Labels = make(map[string]string)
-		}
-		adopted.Spec.PodTemplate.ObjectMeta.Labels[extensionsv1alpha1.SandboxIDLabel] = string(claim.UID)
-
-		// Update uses optimistic concurrency (resourceVersion) so concurrent
-		// claims racing to adopt the same sandbox will conflict and retry.
-		if err := r.Update(ctx, adopted); err != nil {
-			if k8errors.IsConflict(err) || k8errors.IsNotFound(err) {
-				// Another worker adopted this sandbox while we were processing; try next candidate.
-				continue
+			// Extract pool name from owner reference before clearing
+			poolName := "none"
+			if controllerRef := metav1.GetControllerOf(adopted); controllerRef != nil {
+				poolName = controllerRef.Name
 			}
-			log.Error(err, "Failed to update adopted sandbox")
-			return nil, err
+
+			log.Info(fmt.Sprintf("Attempting sandbox adoption: sandbox=%s, pool=%s", adopted.Name, poolName))
+
+			// Remove warm pool labels so the sandbox no longer appears in warm pool queries
+			delete(adopted.Labels, warmPoolSandboxLabel)
+			delete(adopted.Labels, sandboxTemplateRefHash)
+
+			// Transfer ownership from SandboxWarmPool to SandboxClaim
+			adopted.OwnerReferences = nil
+			if err := controllerutil.SetControllerReference(claim, adopted, r.Scheme); err != nil {
+				return nil, fmt.Errorf("failed to set controller reference on adopted sandbox: %w", err)
+			}
+
+			// Propagate trace context from claim
+			if adopted.Annotations == nil {
+				adopted.Annotations = make(map[string]string)
+			}
+			if tc, ok := claim.Annotations[asmetrics.TraceContextAnnotation]; ok {
+				adopted.Annotations[asmetrics.TraceContextAnnotation] = tc
+			}
+
+			// Add sandbox ID label to pod template for NetworkPolicy targeting
+			if adopted.Spec.PodTemplate.ObjectMeta.Labels == nil {
+				adopted.Spec.PodTemplate.ObjectMeta.Labels = make(map[string]string)
+			}
+			adopted.Spec.PodTemplate.ObjectMeta.Labels[extensionsv1alpha1.SandboxIDLabel] = string(claim.UID)
+
+			// Update uses optimistic concurrency (resourceVersion) so concurrent
+			// claims racing to adopt the same sandbox will conflict and retry.
+			// The local inFlightAdoptions map significantly reduces these collisions
+			// by serializing access for the "best" candidates at the front of the list.
+			if err := r.Update(ctx, adopted); err != nil {
+				return nil, err
+			}
+
+			log.Info("Successfully adopted sandbox from warm pool", "sandbox", adopted.Name, "claim", claim.Name)
+
+			if r.Recorder != nil {
+				r.Recorder.Event(claim, corev1.EventTypeNormal, "SandboxAdopted", fmt.Sprintf("Adopted warm pool Sandbox %q", adopted.Name))
+			}
+
+			podCondition := "not_ready"
+			if isSandboxReady(adopted) {
+				podCondition = "ready"
+			}
+			asmetrics.RecordSandboxClaimCreation(claim.Namespace, claim.Spec.TemplateRef.Name, asmetrics.LaunchTypeWarm, poolName, podCondition)
+
+			return adopted, nil
+		}()
+
+		if err == nil {
+			return adoptedSandbox, nil
 		}
 
-		log.Info("Successfully adopted sandbox from warm pool", "sandbox", adopted.Name, "claim", claim.Name)
-
-		if r.Recorder != nil {
-			r.Recorder.Event(claim, corev1.EventTypeNormal, "SandboxAdopted", fmt.Sprintf("Adopted warm pool Sandbox %q", adopted.Name))
+		if k8errors.IsConflict(err) || k8errors.IsNotFound(err) {
+			// Another worker adopted this sandbox while we were processing; try next candidate.
+			continue
 		}
-
-		podCondition := "not_ready"
-		if isSandboxReady(adopted) {
-			podCondition = "ready"
-		}
-		asmetrics.RecordSandboxClaimCreation(claim.Namespace, claim.Spec.TemplateRef.Name, asmetrics.LaunchTypeWarm, poolName, podCondition)
-
-		return adopted, nil
+		log.Error(err, "Failed to update adopted sandbox")
+		return nil, err
 	}
 
 	log.Info("Failed to adopt any sandbox after checking all candidates")
