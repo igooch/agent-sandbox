@@ -98,8 +98,19 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		"sandbox.name":      sandbox.Name,
 		"sandbox.namespace": sandbox.Namespace,
 	}
-	ctx, end := r.Tracer.StartSpan(ctx, sandbox, "ReconcileSandbox", initialAttrs)
-	defer end()
+	ownerRef := metav1.GetControllerOf(sandbox)
+	isClaimOwned := ownerRef != nil && ownerRef.Kind == "SandboxClaim"
+
+	var end func() = func() {}
+	var spanEnded bool
+	if isClaimOwned {
+		ctx, end = r.Tracer.StartSpan(ctx, sandbox, "ReconcileSandbox", initialAttrs)
+	}
+	defer func() {
+		if !spanEnded {
+			end()
+		}
+	}()
 
 	// If the sandbox is being deleted, do nothing
 	if !sandbox.DeletionTimestamp.IsZero() {
@@ -161,7 +172,10 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 func (r *SandboxReconciler) reconcileChildResources(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) error {
-	ctx, end := r.Tracer.StartSpan(ctx, nil, "reconcileChildResources", nil)
+	var end func() = func() {}
+	if r.Tracer.IsRecording(ctx) {
+		ctx, end = r.Tracer.StartSpan(ctx, nil, "reconcileChildResources", nil)
+	}
 	defer end()
 
 	// Create a hash from the sandbox.Name and use it as label value
@@ -284,7 +298,10 @@ func NameHash(objectName string) string {
 }
 
 func (r *SandboxReconciler) reconcileService(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox, nameHash string) (*corev1.Service, error) {
-	ctx, end := r.Tracer.StartSpan(ctx, nil, "reconcileService", nil)
+	var end func() = func() {}
+	if r.Tracer.IsRecording(ctx) {
+		ctx, end = r.Tracer.StartSpan(ctx, nil, "reconcileService", nil)
+	}
 	defer end()
 
 	log := log.FromContext(ctx)
@@ -556,7 +573,10 @@ func (r *SandboxReconciler) reconcilePVCs(ctx context.Context, sandbox *sandboxv
 
 // handles sandbox expiry by deleting child resources and the sandbox itself if needed
 func (r *SandboxReconciler) handleSandboxExpiry(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) (bool, error) {
-	ctx, end := r.Tracer.StartSpan(ctx, nil, "handleSandboxExpiry", nil)
+	var end func() = func() {}
+	if r.Tracer.IsRecording(ctx) {
+		ctx, end = r.Tracer.StartSpan(ctx, nil, "handleSandboxExpiry", nil)
+	}
 	defer end()
 
 	var allErrors error

@@ -36,7 +36,6 @@ import (
 	sandboxv1alpha1 "sigs.k8s.io/agent-sandbox/api/v1alpha1"
 	sandboxcontrollers "sigs.k8s.io/agent-sandbox/controllers"
 	extensionsv1alpha1 "sigs.k8s.io/agent-sandbox/extensions/api/v1alpha1"
-	asmetrics "sigs.k8s.io/agent-sandbox/internal/metrics"
 )
 
 const (
@@ -48,7 +47,6 @@ const (
 type SandboxWarmPoolReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Tracer asmetrics.Instrumenter
 }
 
 //+kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxwarmpools,verbs=get;list;watch;create;update;patch;delete
@@ -71,10 +69,6 @@ func (r *SandboxWarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.Error(err, "Failed to get SandboxWarmPool")
 		return ctrl.Result{}, err
 	}
-
-	// Start Tracing Span
-	ctx, end := r.Tracer.StartSpan(ctx, warmPool, "ReconcileSandboxWarmPool", nil)
-	defer end()
 
 	// Handle deletion
 	if !warmPool.DeletionTimestamp.IsZero() {
@@ -101,9 +95,6 @@ func (r *SandboxWarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 // reconcilePool ensures the correct number of pre-allocated sandboxes exist in the pool
 func (r *SandboxWarmPoolReconciler) reconcilePool(ctx context.Context, warmPool *extensionsv1alpha1.SandboxWarmPool) error {
-	ctx, end := r.Tracer.StartSpan(ctx, nil, "reconcilePool", nil)
-	defer end()
-
 	log := log.FromContext(ctx)
 
 	// Compute hash of the warm pool name for the pool label
@@ -236,9 +227,6 @@ func (r *SandboxWarmPoolReconciler) reconcilePool(ctx context.Context, warmPool 
 
 // adoptSandbox sets this warmpool as the owner of an orphaned sandbox
 func (r *SandboxWarmPoolReconciler) adoptSandbox(ctx context.Context, warmPool *extensionsv1alpha1.SandboxWarmPool, sb *sandboxv1alpha1.Sandbox) error {
-	ctx, end := r.Tracer.StartSpan(ctx, nil, "adoptSandbox", nil)
-	defer end()
-
 	if err := controllerutil.SetControllerReference(warmPool, sb, r.Scheme); err != nil {
 		return err
 	}
@@ -247,9 +235,6 @@ func (r *SandboxWarmPoolReconciler) adoptSandbox(ctx context.Context, warmPool *
 
 // createPoolSandbox creates a full Sandbox CR (with pod template, service, etc.) for the warm pool
 func (r *SandboxWarmPoolReconciler) createPoolSandbox(ctx context.Context, warmPool *extensionsv1alpha1.SandboxWarmPool, poolNameHash string) error {
-	ctx, end := r.Tracer.StartSpan(ctx, nil, "createPoolSandbox", nil)
-	defer end()
-
 	log := log.FromContext(ctx)
 
 	// Try getting template
@@ -363,9 +348,6 @@ func (r *SandboxWarmPoolReconciler) updateStatus(ctx context.Context, oldStatus 
 }
 
 func (r *SandboxWarmPoolReconciler) getTemplate(ctx context.Context, warmPool *extensionsv1alpha1.SandboxWarmPool) (*extensionsv1alpha1.SandboxTemplate, error) {
-	ctx, end := r.Tracer.StartSpan(ctx, nil, "getTemplate", nil)
-	defer end()
-
 	template := &extensionsv1alpha1.SandboxTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: warmPool.Namespace,

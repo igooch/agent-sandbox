@@ -74,9 +74,25 @@ func (r *SandboxClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to get sandbox claim %q: %w", req.NamespacedName, err)
 	}
 
-	// Start Tracing Span
-	ctx, end := r.Tracer.StartSpan(ctx, claim, "ReconcileSandboxClaim", nil)
-	defer end()
+	// Check if already Ready to skip tracing for future reconciliations
+	isAlreadyReady := false
+	for _, cond := range claim.Status.Conditions {
+		if cond.Type == string(v1alpha1.SandboxConditionReady) && cond.Status == metav1.ConditionTrue {
+			isAlreadyReady = true
+			break
+		}
+	}
+
+	var end func() = func() {}
+	var spanEnded bool
+	if !isAlreadyReady {
+		ctx, end = r.Tracer.StartSpan(ctx, claim, "ReconcileSandboxClaim", nil)
+	}
+	defer func() {
+		if !spanEnded {
+			end()
+		}
+	}()
 
 	if !claim.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
@@ -142,7 +158,10 @@ func (r *SandboxClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, errors.Join(reconcileErr, updateErr)
 	}
 
-	r.recordCreationLatencyMetric(ctx, claim, originalClaimStatus, sandbox)
+	if transitioned := r.recordCreationLatencyMetric(ctx, claim, originalClaimStatus, sandbox); transitioned {
+		end()
+		spanEnded = true
+	}
 
 	// Determine Result
 	var result ctrl.Result
@@ -738,18 +757,18 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
 	claim *extensionsv1alpha1.SandboxClaim,
 	oldStatus *extensionsv1alpha1.SandboxClaimStatus,
 	sandbox *v1alpha1.Sandbox,
-) {
+) bool {
 
 	newStatus := &claim.Status
 	newReady := meta.FindStatusCondition(newStatus.Conditions, string(v1alpha1.SandboxConditionReady))
 	if newReady == nil || newReady.Status != metav1.ConditionTrue {
-		return
+		return false
 	}
 
 	// Do not record creation metric if we have already seen the ready state.
 	oldReady := meta.FindStatusCondition(oldStatus.Conditions, string(v1alpha1.SandboxConditionReady))
 	if oldReady != nil && oldReady.Status == metav1.ConditionTrue {
-		return
+		return false
 	}
 
 	launchType := asmetrics.LaunchTypeCold
@@ -774,16 +793,18 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
 
 	// For cold launches, also record the time from Sandbox creation to Ready state to capture controller overhead.
 	if sandbox == nil || sandbox.CreationTimestamp.IsZero() {
-		return
+		return false
 	}
 	sandboxReady := meta.FindStatusCondition(sandbox.Status.Conditions, string(v1alpha1.SandboxConditionReady))
 	if sandboxReady == nil || sandboxReady.Status != metav1.ConditionTrue || sandboxReady.LastTransitionTime.IsZero() {
-		return
+		return false
 	}
 	latency := sandboxReady.LastTransitionTime.Sub(sandbox.CreationTimestamp.Time)
 	if latency >= 0 {
 		asmetrics.RecordSandboxCreationLatency(latency, sandbox.Namespace, launchType, claim.Spec.TemplateRef.Name)
 	}
+
+	return true
 }
 
 // isSandboxExpired checks the Sandbox status condition set by the Core Controller
