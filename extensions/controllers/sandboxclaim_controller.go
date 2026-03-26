@@ -142,7 +142,7 @@ func (r *SandboxClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, errors.Join(reconcileErr, updateErr)
 	}
 
-	r.recordCreationLatencyMetric(claim, originalClaimStatus, sandbox)
+	r.recordCreationLatencyMetric(ctx, claim, originalClaimStatus, sandbox)
 
 	// Determine Result
 	var result ctrl.Result
@@ -734,6 +734,7 @@ func (r *SandboxClaimReconciler) reconcileNetworkPolicy(ctx context.Context, cla
 
 // recordCreationLatencyMetric detects and records transitions to Ready state.
 func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
+	ctx context.Context,
 	claim *extensionsv1alpha1.SandboxClaim,
 	oldStatus *extensionsv1alpha1.SandboxClaimStatus,
 	sandbox *v1alpha1.Sandbox,
@@ -763,6 +764,13 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
 	// SandboxClaim doesn't react to TemplateRef updates currently, so we don't need to handle the
 	// startup latency when the TemplateRef is updated.
 	asmetrics.RecordClaimStartupLatency(claim.CreationTimestamp.Time, launchType, claim.Spec.TemplateRef.Name)
+
+	if r.Tracer.IsRecording(ctx) {
+		r.Tracer.AddEvent(ctx, "ClaimReady", map[string]string{
+			"launchType":   string(launchType),
+			"templateName": claim.Spec.TemplateRef.Name,
+		})
+	}
 
 	// For cold launches, also record the time from Sandbox creation to Ready state to capture controller overhead.
 	if sandbox == nil || sandbox.CreationTimestamp.IsZero() {

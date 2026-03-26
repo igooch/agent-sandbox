@@ -1180,9 +1180,11 @@ func TestRecordCreationLatencyMetric(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Reset the metrics registry for a clean test
 			asmetrics.ClaimStartupLatency.Reset()
-			r := &SandboxClaimReconciler{}
+			r := &SandboxClaimReconciler{
+				Tracer: asmetrics.NewNoOp(),
+			}
 
-			r.recordCreationLatencyMetric(tc.claim, tc.oldStatus, tc.sandbox)
+			r.recordCreationLatencyMetric(context.Background(), tc.claim, tc.oldStatus, tc.sandbox)
 
 			// Verify the metric was observed in the Prometheus registry
 			count := testutil.CollectAndCount(asmetrics.ClaimStartupLatency)
