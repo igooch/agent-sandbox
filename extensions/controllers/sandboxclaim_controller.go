@@ -790,7 +790,7 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
 			"launchType":   string(launchType),
 			"templateName": claim.Spec.TemplateRef.Name,
 			"claimName":    claim.Name,
-			"claimLatency": claimLatency.String(),
+			"claimLatency": fmt.Sprintf("%dms", claimLatency.Milliseconds()),
 		})
 	}
 
