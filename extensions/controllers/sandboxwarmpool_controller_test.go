@@ -29,6 +29,7 @@ import (
 	sandboxv1alpha1 "sigs.k8s.io/agent-sandbox/api/v1alpha1"
 	sandboxcontrollers "sigs.k8s.io/agent-sandbox/controllers"
 	extensionsv1alpha1 "sigs.k8s.io/agent-sandbox/extensions/api/v1alpha1"
+	asmetrics "sigs.k8s.io/agent-sandbox/internal/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -163,6 +164,7 @@ func TestReconcilePool(t *testing.T) {
 					WithRuntimeObjects(tc.initialObjs...).
 					Build(),
 				Scheme: scheme,
+				Tracer: asmetrics.NewNoOp(),
 			}
 
 			ctx := context.Background()
@@ -301,6 +303,7 @@ func TestReconcilePoolControllerRef(t *testing.T) {
 					WithRuntimeObjects(tc.initialObjs...).
 					Build(),
 				Scheme: scheme,
+				Tracer: asmetrics.NewNoOp(),
 			}
 
 			ctx := context.Background()
@@ -393,6 +396,7 @@ func TestPoolLabelValueInIntegration(t *testing.T) {
 				WithRuntimeObjects(template).
 				Build(),
 			Scheme: scheme,
+			Tracer: asmetrics.NewNoOp(),
 		}
 
 		expectedPoolNameHash := sandboxcontrollers.NameHash(poolName)
@@ -511,6 +515,7 @@ func TestReconcilePoolReadyReplicas(t *testing.T) {
 					WithRuntimeObjects(tc.initialObjs...).
 					Build(),
 				Scheme: scheme,
+				Tracer: asmetrics.NewNoOp(),
 			}
 
 			ctx := context.Background()
@@ -572,6 +577,7 @@ func TestReconcilePoolGCStuckSandboxes(t *testing.T) {
 				).
 				Build(),
 			Scheme: scheme,
+			Tracer: asmetrics.NewNoOp(),
 		}
 
 		ctx := context.Background()
@@ -604,6 +610,7 @@ func TestReconcilePoolGCStuckSandboxes(t *testing.T) {
 				).
 				Build(),
 			Scheme: scheme,
+			Tracer: asmetrics.NewNoOp(),
 		}
 
 		ctx := context.Background()

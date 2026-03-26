@@ -176,6 +176,9 @@ func (r *SandboxClaimReconciler) checkExpiration(claim *extensionsv1alpha1.Sandb
 
 // reconcileActive handles the creation and updates of running sandboxes.
 func (r *SandboxClaimReconciler) reconcileActive(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim) (*v1alpha1.Sandbox, error) {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "reconcileActive", nil)
+	defer end()
+
 	logger := log.FromContext(ctx)
 
 	// Fast path: try to find existing or adopt from warm pool before template lookup.
@@ -216,6 +219,9 @@ func (r *SandboxClaimReconciler) reconcileActive(ctx context.Context, claim *ext
 
 // reconcileExpired ensures the Sandbox is deleted for Retained claims.
 func (r *SandboxClaimReconciler) reconcileExpired(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim) (*v1alpha1.Sandbox, error) {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "reconcileExpired", nil)
+	defer end()
+
 	log := log.FromContext(ctx)
 	sandbox := &v1alpha1.Sandbox{}
 
@@ -341,6 +347,9 @@ func (r *SandboxClaimReconciler) computeAndSetStatus(claim *extensionsv1alpha1.S
 
 // adoptSandboxFromCandidates picks the best candidate and transfers ownership to the claim.
 func (r *SandboxClaimReconciler) adoptSandboxFromCandidates(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim, candidates []*v1alpha1.Sandbox) (*v1alpha1.Sandbox, error) {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "adoptSandboxFromCandidates", nil)
+	defer end()
+
 	log := log.FromContext(ctx)
 
 	// Sort: ready sandboxes first, then by creation time (oldest first)
@@ -448,6 +457,9 @@ func isSandboxReady(sb *v1alpha1.Sandbox) bool {
 }
 
 func (r *SandboxClaimReconciler) createSandbox(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim, template *extensionsv1alpha1.SandboxTemplate) (*v1alpha1.Sandbox, error) {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "createSandbox", nil)
+	defer end()
+
 	logger := log.FromContext(ctx)
 
 	if template == nil {
@@ -531,6 +543,9 @@ func (r *SandboxClaimReconciler) createSandbox(ctx context.Context, claim *exten
 }
 
 func (r *SandboxClaimReconciler) getOrCreateSandbox(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim, _ *extensionsv1alpha1.SandboxTemplate) (*v1alpha1.Sandbox, error) {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "getOrCreateSandbox", nil)
+	defer end()
+
 	logger := log.FromContext(ctx)
 
 	// Check if a previously adopted sandbox is recorded in claim status
@@ -622,6 +637,9 @@ func (r *SandboxClaimReconciler) getOrCreateSandbox(ctx context.Context, claim *
 }
 
 func (r *SandboxClaimReconciler) getTemplate(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim) (*extensionsv1alpha1.SandboxTemplate, error) {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "getTemplate", nil)
+	defer end()
+
 	template := &extensionsv1alpha1.SandboxTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: claim.Namespace,
@@ -650,6 +668,9 @@ func (r *SandboxClaimReconciler) SetupWithManager(mgr ctrl.Manager, concurrentWo
 
 // reconcileNetworkPolicy ensures a NetworkPolicy exists for the claimed Sandbox.
 func (r *SandboxClaimReconciler) reconcileNetworkPolicy(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim, template *extensionsv1alpha1.SandboxTemplate) error {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "reconcileNetworkPolicy", nil)
+	defer end()
+
 	logger := log.FromContext(ctx)
 
 	// Skip if the template opts out of managed network policies

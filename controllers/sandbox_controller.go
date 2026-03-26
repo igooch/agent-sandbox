@@ -161,6 +161,9 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 func (r *SandboxReconciler) reconcileChildResources(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) error {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "reconcileChildResources", nil)
+	defer end()
+
 	// Create a hash from the sandbox.Name and use it as label value
 	nameHash := NameHash(sandbox.Name)
 
@@ -281,6 +284,9 @@ func NameHash(objectName string) string {
 }
 
 func (r *SandboxReconciler) reconcileService(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox, nameHash string) (*corev1.Service, error) {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "reconcileService", nil)
+	defer end()
+
 	log := log.FromContext(ctx)
 	service := &corev1.Service{}
 	if err := r.Get(ctx, types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}, service); err != nil {
@@ -550,6 +556,9 @@ func (r *SandboxReconciler) reconcilePVCs(ctx context.Context, sandbox *sandboxv
 
 // handles sandbox expiry by deleting child resources and the sandbox itself if needed
 func (r *SandboxReconciler) handleSandboxExpiry(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) (bool, error) {
+	ctx, end := r.Tracer.StartSpan(ctx, nil, "handleSandboxExpiry", nil)
+	defer end()
+
 	var allErrors error
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
