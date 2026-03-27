@@ -782,7 +782,7 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
 
 	// SandboxClaim doesn't react to TemplateRef updates currently, so we don't need to handle the
 	// startup latency when the TemplateRef is updated.
-	claimLatency := newReady.LastTransitionTime.Time.Sub(claim.CreationTimestamp.Time)
+	claimLatency := time.Since(claim.CreationTimestamp.Time)
 	asmetrics.RecordClaimStartupLatency(claimLatency, launchType, claim.Spec.TemplateRef.Name)
 
 	if r.Tracer.IsRecording(ctx) {
