@@ -36,7 +36,9 @@ import (
 	"sigs.k8s.io/agent-sandbox/controllers"
 	extensionsv1alpha1 "sigs.k8s.io/agent-sandbox/extensions/api/v1alpha1"
 	extensionscontrollers "sigs.k8s.io/agent-sandbox/extensions/controllers"
+	"sigs.k8s.io/agent-sandbox/extensions/webhooks"
 	asmetrics "sigs.k8s.io/agent-sandbox/internal/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -249,6 +251,13 @@ func main() {
 			setupLog.Error(err, "unable to create controller", "controller", "SandboxWarmPool")
 			os.Exit(1)
 		}
+
+		setupLog.Info("Registering mutating webhook for SandboxClaim")
+		mgr.GetWebhookServer().Register("/mutate-extensions-api-v1alpha1-sandboxclaim", &admission.Webhook{
+			Handler: &webhooks.SandboxClaimAnnotator{
+				Decoder: admission.NewDecoder(mgr.GetScheme()),
+			},
+		})
 	}
 
 	//+kubebuilder:scaffold:builder

@@ -14,9 +14,11 @@
 # limitations under the License.
 
 import argparse
+import base64
 import io
 import os
 import subprocess
+import tempfile
 import yaml
 
 from shared import utils
@@ -94,6 +96,34 @@ def walk_object(obj, fn, field_path=""):
         raise Exception(f"unexpected type: {type(obj)}")
 
 
+def generate_webhook_certs():
+    """Generates self-signed certificates for the webhook server."""
+    print("Generating self-signed certificates for webhook...")
+    with tempfile.TemporaryDirectory() as dir:
+        subprocess.run(["openssl", "genrsa", "-out", os.path.join(dir, "ca.key"), "2048"], check=True, capture_output=True)
+        subprocess.run(["openssl", "req", "-x509", "-new", "-nodes", "-key", os.path.join(dir, "ca.key"), 
+                        "-subj", "/CN=agent-sandbox-webhook-ca", "-days", "3650", 
+                        "-out", os.path.join(dir, "ca.crt")], check=True, capture_output=True)
+        subprocess.run(["openssl", "genrsa", "-out", os.path.join(dir, "tls.key"), "2048"], check=True, capture_output=True)
+        subprocess.run(["openssl", "req", "-new", "-key", os.path.join(dir, "tls.key"), 
+                        "-subj", "/CN=agent-sandbox-webhook-service.agent-sandbox-system.svc", 
+                        "-out", os.path.join(dir, "tls.csr")], check=True, capture_output=True)
+        ext_path = os.path.join(dir, "extfile.cnf")
+        with open(ext_path, "w") as f:
+            f.write("subjectAltName=DNS:agent-sandbox-webhook-service.agent-sandbox-system.svc")
+        subprocess.run(["openssl", "x509", "-req", "-in", os.path.join(dir, "tls.csr"), 
+                        "-CA", os.path.join(dir, "ca.crt"), "-CAkey", os.path.join(dir, "ca.key"), 
+                        "-CAcreateserial", "-out", os.path.join(dir, "tls.crt"), "-days", "3650", 
+                        "-extfile", ext_path], check=True, capture_output=True)
+        with open(os.path.join(dir, "ca.crt"), "rb") as f:
+            ca_bundle = base64.b64encode(f.read()).decode("utf-8")
+        with open(os.path.join(dir, "tls.key"), "rb") as f:
+            tls_key = base64.b64encode(f.read()).decode("utf-8")
+        with open(os.path.join(dir, "tls.crt"), "rb") as f:
+            tls_crt = base64.b64encode(f.read()).decode("utf-8")
+    return ca_bundle, tls_key, tls_crt
+
+
 def kubectl_apply_objects(docs, repo_root):
     """Applies a list of Kubernetes documents using 'kubectl apply'.
 
@@ -151,27 +181,27 @@ def gather_manifests(manifests_path):
 
 
 def process_manifests(all_docs, args):
-    """Filters, modifies, and sorts a list of raw manifest objects.
-
-    This function applies the core deployment logic based on the script's
-    arguments. It filters out unwanted documents, replaces image tags, and
-    sorts the documents into three batches for ordered application:
-    prerequisites, standard documents, and extensions documents.
-
-    Args:
-        all_docs (list): The raw list of manifest objects from gather_manifests.
-        args (argparse.Namespace): The parsed command-line arguments.
-
-    Returns:
-        tuple: A tuple containing three lists of documents:
-               (prereq_docs, other_docs, extensions_docs).
-    """
+    """Filters, modifies, and sorts a list of raw manifest objects."""
     prereq_docs = []
     extensions_docs = []
     other_docs = []
 
     image_prefix = utils.get_image_prefix(args)
     image_tag = utils.get_image_tag()
+
+    ca_bundle, tls_key, tls_crt = None, None, None
+    need_webhook = False
+    for item in all_docs:
+        if item["kind"] == "MutatingWebhookConfiguration" and args.extensions:
+            need_webhook = True
+            break
+
+    if need_webhook:
+        try:
+            ca_bundle, tls_key, tls_crt = generate_webhook_certs()
+        except Exception as e:
+            print(f"Failed to generate webhook certs: {e}")
+            print("Fallback: proceed without webhook certs (deployment might fail)")
 
     for item in all_docs:
         doc = item["doc"]
@@ -195,12 +225,33 @@ def process_manifests(all_docs, args):
         find_and_replace_images(doc, image_prefix, image_tag)
         append_controller_flags(doc, getattr(args, "controller_args", ""))
 
+        if kind == "MutatingWebhookConfiguration" and ca_bundle:
+            for webhook in doc.get("webhooks", []):
+                webhook["clientConfig"]["caBundle"] = ca_bundle
+
         if kind in ["CustomResourceDefinition", "Namespace"]:
             prereq_docs.append(doc)
         elif is_extension_file:
             extensions_docs.append(doc)
         else:
             other_docs.append(doc)
+
+    if need_webhook and tls_key and tls_crt:
+        secret_doc = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "agent-sandbox-webhook-certs",
+                "namespace": "agent-sandbox-system",
+            },
+            "type": "kubernetes.io/tls",
+            "data": {
+                "tls.key": tls_key,
+                "tls.crt": tls_crt,
+                "ca.crt": ca_bundle,
+            }
+        }
+        prereq_docs.append(secret_doc)
 
     return prereq_docs, other_docs, extensions_docs
 
@@ -234,20 +285,20 @@ def apply_manifests(prereq_docs, other_docs, extensions_docs, repo_root, apply_e
 
 
 def main(args):
-    """Orchestrates the Kubernetes deployment process.
-
-    This function calls the gather, process, and apply functions in sequence
-    to carry out the full deployment workflow.
-
-    Args:
-        args (argparse.Namespace): The parsed command-line arguments.
-    """
+    """Orchestrates the Kubernetes deployment process."""
     repo_root = utils.get_repo_root()
     manifests_path = os.path.join(repo_root, "k8s")
 
     all_docs = gather_manifests(manifests_path)
     prereq_docs, other_docs, extension_docs = process_manifests(all_docs, args)
-    apply_manifests(prereq_docs, other_docs, extension_docs, repo_root, args.extensions)
+    
+    if args.dry_run:
+        all_to_print = prereq_docs + other_docs
+        if args.extensions:
+            all_to_print += extension_docs
+        print(yaml.dump_all(all_to_print))
+    else:
+        apply_manifests(prereq_docs, other_docs, extension_docs, repo_root, args.extensions)
 
 
 if __name__ == "__main__":
@@ -265,6 +316,9 @@ if __name__ == "__main__":
     parser.add_argument("--extensions",
                         action="store_true",
                         help="Apply the extensions controller manifest. This flag must be set to deploy extensions.")
+    parser.add_argument("--dry-run",
+                        action="store_true",
+                        help="Print the processed manifests to stdout instead of applying them.")
     parser.add_argument("--controller-args",
                         dest="controller_args",
                         help="Space-separated flags to pass to the controller container. Example " \

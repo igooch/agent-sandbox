@@ -84,6 +84,34 @@ func (r *SandboxClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to get sandbox claim %q: %w", req.NamespacedName, err)
 	}
 
+	now := time.Now()
+	logger.Info("TIMESTAMPS: Current Time", "currentTime", now.Format(time.RFC3339Nano))
+
+	creationTime := claim.CreationTimestamp.Time
+	creationDuration := now.Sub(creationTime)
+	logger.Info("TIMESTAMPS: CreationTimestamp", "creationTime", creationTime.Format(time.RFC3339Nano), "duration", creationDuration.String())
+
+	webhookTimeStr := "none"
+	webhookDurationStr := "n/a"
+	var webhookDuration time.Duration
+	hasWebhookDuration := false
+	if claim.Annotations != nil {
+		if tStr, ok := claim.Annotations["agent-sandbox.kubernetes.io/created-at"]; ok {
+			webhookTimeStr = tStr
+			if t, err := time.Parse(time.RFC3339Nano, tStr); err == nil {
+				webhookDuration = now.Sub(t)
+				webhookDurationStr = webhookDuration.String()
+				hasWebhookDuration = true
+			}
+		}
+	}
+	logger.Info("TIMESTAMPS: Webhook Timestamp", "webhookTime", webhookTimeStr, "duration", webhookDurationStr)
+
+	if hasWebhookDuration {
+		diff := creationDuration - webhookDuration
+		logger.Info("TIMESTAMPS: Duration Diff", "durationDiff", diff.String())
+	}
+
 	// Start Tracing Span
 	ctx, end := r.Tracer.StartSpan(ctx, claim, "ReconcileSandboxClaim", nil)
 	defer end()
@@ -816,11 +844,22 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
 	if sandbox != nil {
 		sandboxName = sandbox.Name
 	}
-	logger.V(1).Info("SandboxClaim is marked as Ready", "claim", claim.Name, "sandbox", sandboxName, "duration", time.Since(claim.CreationTimestamp.Time))
 
-	// SandboxClaim doesn't react to TemplateRef updates currently, so we don't need to handle the
-	// startup latency when the TemplateRef is updated.
-	asmetrics.RecordClaimStartupLatency(claim.CreationTimestamp.Time, launchType, claim.Spec.TemplateRef.Name)
+	baselineStartTime := claim.CreationTimestamp.Time
+	asmetrics.RecordClaimStartupLatency(baselineStartTime, launchType, claim.Spec.TemplateRef.Name)
+
+	if claim.Annotations != nil && claim.Annotations["agent-sandbox.kubernetes.io/created-at"] != "" {
+		if t, err := time.Parse(time.RFC3339Nano, claim.Annotations["agent-sandbox.kubernetes.io/created-at"]); err == nil {
+			asmetrics.RecordClaimWebhookStartupLatency(t, launchType, claim.Spec.TemplateRef.Name)
+			logger.V(1).Info("SandboxClaim is marked as Ready (Webhook)", "claim", claim.Name, "sandbox", sandboxName, "duration", time.Since(t))
+		} else {
+			logger.V(1).Info("SandboxClaim is NOT marked as Ready (Webhook)", "claim", claim.Name, "sandbox", sandboxName, "error", err)
+		}
+	} else {
+		logger.V(1).Info("SandboxClaim is NOT marked as Ready (Webhook)", "claim", claim.Name, "sandbox", sandboxName, "error", "no created-at annotation")
+	}
+
+	logger.V(1).Info("SandboxClaim is marked as Ready", "claim", claim.Name, "sandbox", sandboxName, "duration", time.Since(baselineStartTime))
 
 	// For cold launches, also record the time from Sandbox creation to Ready state to capture controller overhead.
 	if sandbox == nil || sandbox.CreationTimestamp.IsZero() {
