@@ -28,15 +28,15 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"sigs.k8s.io/agent-sandbox/controllers"
+	extensionsv1alpha1 "sigs.k8s.io/agent-sandbox/extensions/api/v1alpha1"
+	extensionscontrollers "sigs.k8s.io/agent-sandbox/extensions/controllers"
+	"sigs.k8s.io/agent-sandbox/extensions/controllers/queue"
+	asmetrics "sigs.k8s.io/agent-sandbox/internal/metrics"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-
-	"sigs.k8s.io/agent-sandbox/controllers"
-	extensionsv1alpha1 "sigs.k8s.io/agent-sandbox/extensions/api/v1alpha1"
-	extensionscontrollers "sigs.k8s.io/agent-sandbox/extensions/controllers"
-	asmetrics "sigs.k8s.io/agent-sandbox/internal/metrics"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -222,11 +222,14 @@ func main() {
 	}
 
 	if extensions {
+		warmSandboxQueue := queue.NewSimplePodQueue()
+		defer warmSandboxQueue.Shutdown()
 		if err = (&extensionscontrollers.SandboxClaimReconciler{
-			Client:   mgr.GetClient(),
-			Scheme:   mgr.GetScheme(),
-			Recorder: mgr.GetEventRecorder("sandboxclaim-controller"),
-			Tracer:   instrumenter,
+			Client:           mgr.GetClient(),
+			Scheme:           mgr.GetScheme(),
+			WarmSandboxQueue: warmSandboxQueue,
+			Recorder:         mgr.GetEventRecorder("sandboxclaim-controller"),
+			Tracer:           instrumenter,
 		}).SetupWithManager(mgr, sandboxClaimConcurrentWorkers); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SandboxClaim")
 			os.Exit(1)
