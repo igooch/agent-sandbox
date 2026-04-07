@@ -47,6 +47,7 @@ import (
 )
 
 const ObservabilityAnnotation = "agents.x-k8s.io/controller-first-observed-at"
+const WebhookFirstSeenAnnotation = "agents.x-k8s.io/webhook-first-seen-at"
 
 // ErrTemplateNotFound is a sentinel error indicating a SandboxTemplate was not found.
 var ErrTemplateNotFound = errors.New("SandboxTemplate not found")
@@ -839,9 +840,17 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
 	}
 	logger.V(1).Info("SandboxClaim is marked as Ready", "claim", claim.Name, "sandbox", sandboxName, "duration", time.Since(claim.CreationTimestamp.Time))
 
-	// SandboxClaim doesn't react to TemplateRef updates currently, so we don't need to handle the
-	// startup latency when the TemplateRef is updated.
-	asmetrics.RecordClaimStartupLatency(claim.CreationTimestamp.Time, launchType, claim.Spec.TemplateRef.Name)
+	webhookSeenTimeStr := claim.Annotations[WebhookFirstSeenAnnotation]
+	if webhookSeenTimeStr == "" {
+		logger.V(1).Info("Webhook first seen annotation missing, skipping ClaimStartupLatency metric", "claim", claim.Name)
+	} else {
+		webhookSeenTime, err := time.Parse(time.RFC3339Nano, webhookSeenTimeStr)
+		if err != nil {
+			logger.Error(err, "Failed to parse webhook first seen time", "value", webhookSeenTimeStr)
+		} else {
+			asmetrics.RecordClaimStartupLatency(webhookSeenTime, launchType, claim.Spec.TemplateRef.Name)
+		}
+	}
 
 	// Record controller startup latency
 	if observedTimeString := claim.Annotations[ObservabilityAnnotation]; observedTimeString != "" {
