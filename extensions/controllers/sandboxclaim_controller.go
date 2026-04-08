@@ -867,7 +867,7 @@ func (r *SandboxClaimReconciler) recordControllerStartupLatency(ctx context.Cont
 }
 
 // recordSandboxCreationLatency records the sandbox creation latency for cold launches.
-func (r *SandboxClaimReconciler) recordSandboxCreationLatency(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim, sandbox *v1alpha1.Sandbox, launchType string) {
+func (r *SandboxClaimReconciler) recordSandboxCreationLatency(claim *extensionsv1alpha1.SandboxClaim, sandbox *v1alpha1.Sandbox, launchType string) {
 	if sandbox == nil || sandbox.CreationTimestamp.IsZero() {
 		return
 	}
@@ -912,7 +912,7 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(
 
 	r.recordClaimStartupLatency(ctx, claim, launchType)
 	r.recordControllerStartupLatency(ctx, claim, launchType)
-	r.recordSandboxCreationLatency(ctx, claim, sandbox, launchType)
+	r.recordSandboxCreationLatency(claim, sandbox, launchType)
 }
 
 // isSandboxExpired checks the Sandbox status condition set by the Core Controller
