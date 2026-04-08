@@ -42,6 +42,7 @@ import (
 	sandboxv1alpha1 "sigs.k8s.io/agent-sandbox/api/v1alpha1"
 	sandboxcontrollers "sigs.k8s.io/agent-sandbox/controllers"
 	extensionsv1alpha1 "sigs.k8s.io/agent-sandbox/extensions/api/v1alpha1"
+	"sigs.k8s.io/agent-sandbox/extensions/controllers/queue"
 	asmetrics "sigs.k8s.io/agent-sandbox/internal/metrics"
 )
 
@@ -446,12 +447,24 @@ func TestSandboxClaimReconcile(t *testing.T) {
 			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(allObjects...).WithStatusSubresource(claimToUse).Build()
 
 			reconciler := &SandboxClaimReconciler{
-				Client:   client,
-				Scheme:   scheme,
-				Recorder: events.NewFakeRecorder(10),
-				Tracer:   asmetrics.NewNoOp(),
+				Client:           client,
+				Scheme:           scheme,
+				WarmSandboxQueue: queue.NewSimplePodQueue(),
+				Recorder:         events.NewFakeRecorder(10),
+				Tracer:           asmetrics.NewNoOp(),
 			}
 
+			// Pre-populate PodQueue with any existing pods
+			for _, obj := range allObjects {
+				if sb, ok := obj.(*sandboxv1alpha1.Sandbox); ok {
+					if isAdoptable(sb) != nil {
+						continue
+					}
+					hash := sb.Labels[sandboxTemplateRefHash]
+					key := queue.SandboxKey{Namespace: sb.Namespace, Name: sb.Name}
+					reconciler.WarmSandboxQueue.Add(hash, key)
+				}
+			}
 			req := reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: claimToUse.Name, Namespace: "default"},
 			}
@@ -704,10 +717,11 @@ func TestSandboxProvisionEvent(t *testing.T) {
 		WithStatusSubresource(claim).Build()
 
 	reconciler := &SandboxClaimReconciler{
-		Client:   client,
-		Scheme:   scheme,
-		Recorder: fakeRecorder,
-		Tracer:   asmetrics.NewNoOp(),
+		Client:           client,
+		Scheme:           scheme,
+		Recorder:         fakeRecorder,
+		WarmSandboxQueue: queue.NewSimplePodQueue(),
+		Tracer:           asmetrics.NewNoOp(),
 	}
 
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: claimName, Namespace: "default"}}
@@ -933,7 +947,7 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 			expectNewSandboxCreated: true,
 		},
 		{
-			name: "prioritizes ready sandboxes over not-ready ones",
+			name: "adopts sandboxes from queue regardless of ready state",
 			existingObjects: []client.Object{
 				template,
 				claim,
@@ -942,11 +956,11 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 				createWarmPoolSandbox("young-ready", metav1.Now(), true),
 			},
 			expectSandboxAdoption:   true,
-			expectedAdoptedSandbox:  "middle-ready",
+			expectedAdoptedSandbox:  "not-ready",
 			expectNewSandboxCreated: false,
 		},
 		{
-			name: "adopts oldest non-ready sandbox when no ready sandboxes exist",
+			name: "adopts first available non-ready sandbox from queue",
 			existingObjects: []client.Object{
 				template,
 				claim,
@@ -988,11 +1002,28 @@ func TestSandboxClaimSandboxAdoption(t *testing.T) {
 				}
 			}
 
+			// 1. Initialize the Queue
+			warmSandboxQueue := queue.NewSimplePodQueue()
+
+			// 2. Seed the Queue with the existing objects from the test case
+			for _, obj := range tc.existingObjects {
+				if sb, ok := obj.(*sandboxv1alpha1.Sandbox); ok {
+					// Only add valid, adoptable sandboxes to the queue
+					if isAdoptable(sb) == nil {
+						hash := sb.Labels[sandboxTemplateRefHash]
+						key := queue.SandboxKey{Namespace: sb.Namespace, Name: sb.Name}
+						warmSandboxQueue.Add(hash, key)
+					}
+				}
+			}
+
+			// 3. Inject the seeded Queue into the Reconciler
 			reconciler := &SandboxClaimReconciler{
-				Client:   fakeClient,
-				Scheme:   scheme,
-				Recorder: events.NewFakeRecorder(10),
-				Tracer:   asmetrics.NewNoOp(),
+				Client:           fakeClient,
+				Scheme:           scheme,
+				Recorder:         events.NewFakeRecorder(10),
+				WarmSandboxQueue: warmSandboxQueue,
+				Tracer:           asmetrics.NewNoOp(),
 			}
 
 			req := reconcile.Request{
@@ -1309,10 +1340,11 @@ func TestSandboxClaimCreationMetric(t *testing.T) {
 		scheme := newScheme(t)
 		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(template, claim).WithStatusSubresource(claim).Build()
 		reconciler := &SandboxClaimReconciler{
-			Client:   client,
-			Scheme:   scheme,
-			Recorder: events.NewFakeRecorder(10),
-			Tracer:   asmetrics.NewNoOp(),
+			Client:           client,
+			Scheme:           scheme,
+			Recorder:         events.NewFakeRecorder(10),
+			WarmSandboxQueue: queue.NewSimplePodQueue(),
+			Tracer:           asmetrics.NewNoOp(),
 		}
 
 		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: claim.Name, Namespace: "default"}}
@@ -1364,13 +1396,20 @@ func TestSandboxClaimCreationMetric(t *testing.T) {
 
 		scheme := newScheme(t)
 		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(template, claim, warmSandbox).WithStatusSubresource(claim).Build()
-		reconciler := &SandboxClaimReconciler{
-			Client:   client,
-			Scheme:   scheme,
-			Recorder: events.NewFakeRecorder(10),
-			Tracer:   asmetrics.NewNoOp(),
+		warmSandboxQueue := queue.NewSimplePodQueue()
+		if isAdoptable(warmSandbox) == nil {
+			hash := warmSandbox.Labels[sandboxTemplateRefHash]
+			key := queue.SandboxKey{Namespace: warmSandbox.Namespace, Name: warmSandbox.Name}
+			warmSandboxQueue.Add(hash, key)
 		}
 
+		reconciler := &SandboxClaimReconciler{
+			Client:           client,
+			Scheme:           scheme,
+			Recorder:         events.NewFakeRecorder(10),
+			WarmSandboxQueue: warmSandboxQueue,
+			Tracer:           asmetrics.NewNoOp(),
+		}
 		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: claim.Name, Namespace: "default"}}
 		_, err := reconciler.Reconcile(context.Background(), req)
 		if err != nil {
@@ -1512,11 +1551,23 @@ func TestSandboxClaimWarmPoolPolicy(t *testing.T) {
 			WithStatusSubresource(claimWithNone).
 			Build()
 
+		warmSandboxQueue := queue.NewSimplePodQueue()
+		for _, obj := range existingObjects { // (Use whatever the slice of objects is named in that specific test)
+			if sb, ok := obj.(*sandboxv1alpha1.Sandbox); ok {
+				if isAdoptable(sb) == nil {
+					hash := sb.Labels[sandboxTemplateRefHash]
+					key := queue.SandboxKey{Namespace: sb.Namespace, Name: sb.Name}
+					warmSandboxQueue.Add(hash, key)
+				}
+			}
+		}
+
 		reconciler := &SandboxClaimReconciler{
-			Client:   fakeClient,
-			Scheme:   scheme,
-			Recorder: events.NewFakeRecorder(10),
-			Tracer:   asmetrics.NewNoOp(),
+			Client:           fakeClient,
+			Scheme:           scheme,
+			Recorder:         events.NewFakeRecorder(10),
+			Tracer:           asmetrics.NewNoOp(),
+			WarmSandboxQueue: warmSandboxQueue,
 		}
 
 		req := reconcile.Request{
@@ -1568,11 +1619,23 @@ func TestSandboxClaimWarmPoolPolicy(t *testing.T) {
 			WithStatusSubresource(claimWithSpecificPool).
 			Build()
 
+		warmSandboxQueue := queue.NewSimplePodQueue()
+		for _, obj := range existingObjects { // (Use whatever the slice of objects is named in that specific test)
+			if sb, ok := obj.(*sandboxv1alpha1.Sandbox); ok {
+				if isAdoptable(sb) == nil {
+					hash := sb.Labels[sandboxTemplateRefHash]
+					key := queue.SandboxKey{Namespace: sb.Namespace, Name: sb.Name}
+					warmSandboxQueue.Add(hash, key)
+				}
+			}
+		}
+
 		reconciler := &SandboxClaimReconciler{
-			Client:   fakeClient,
-			Scheme:   scheme,
-			Recorder: events.NewFakeRecorder(10),
-			Tracer:   asmetrics.NewNoOp(),
+			Client:           fakeClient,
+			Scheme:           scheme,
+			Recorder:         events.NewFakeRecorder(10),
+			Tracer:           asmetrics.NewNoOp(),
+			WarmSandboxQueue: warmSandboxQueue,
 		}
 
 		req := reconcile.Request{
@@ -1629,11 +1692,23 @@ func TestSandboxClaimWarmPoolPolicy(t *testing.T) {
 			WithStatusSubresource(claimWithSpecificPool).
 			Build()
 
+		warmSandboxQueue := queue.NewSimplePodQueue()
+		for _, obj := range existingObjects { // (Use whatever the slice of objects is named in that specific test)
+			if sb, ok := obj.(*sandboxv1alpha1.Sandbox); ok {
+				if isAdoptable(sb) == nil {
+					hash := sb.Labels[sandboxTemplateRefHash]
+					key := queue.SandboxKey{Namespace: sb.Namespace, Name: sb.Name}
+					warmSandboxQueue.Add(hash, key)
+				}
+			}
+		}
+
 		reconciler := &SandboxClaimReconciler{
-			Client:   fakeClient,
-			Scheme:   scheme,
-			Recorder: events.NewFakeRecorder(10),
-			Tracer:   asmetrics.NewNoOp(),
+			Client:           fakeClient,
+			Scheme:           scheme,
+			Recorder:         events.NewFakeRecorder(10),
+			Tracer:           asmetrics.NewNoOp(),
+			WarmSandboxQueue: warmSandboxQueue,
 		}
 
 		req := reconcile.Request{
@@ -1680,11 +1755,23 @@ func TestSandboxClaimWarmPoolPolicy(t *testing.T) {
 			WithStatusSubresource(claimWithDefault).
 			Build()
 
+		warmSandboxQueue := queue.NewSimplePodQueue()
+		for _, obj := range existingObjects { // (Use whatever the slice of objects is named in that specific test)
+			if sb, ok := obj.(*sandboxv1alpha1.Sandbox); ok {
+				if isAdoptable(sb) == nil {
+					hash := sb.Labels[sandboxTemplateRefHash]
+					key := queue.SandboxKey{Namespace: sb.Namespace, Name: sb.Name}
+					warmSandboxQueue.Add(hash, key)
+				}
+			}
+		}
+
 		reconciler := &SandboxClaimReconciler{
-			Client:   fakeClient,
-			Scheme:   scheme,
-			Recorder: events.NewFakeRecorder(10),
-			Tracer:   asmetrics.NewNoOp(),
+			Client:           fakeClient,
+			Scheme:           scheme,
+			Recorder:         events.NewFakeRecorder(10),
+			Tracer:           asmetrics.NewNoOp(),
+			WarmSandboxQueue: warmSandboxQueue,
 		}
 
 		req := reconcile.Request{
@@ -1730,11 +1817,23 @@ func TestSandboxClaimWarmPoolPolicy(t *testing.T) {
 			WithStatusSubresource(claimWithNil).
 			Build()
 
+		warmSandboxQueue := queue.NewSimplePodQueue()
+		for _, obj := range existingObjects { // (Use whatever the slice of objects is named in that specific test)
+			if sb, ok := obj.(*sandboxv1alpha1.Sandbox); ok {
+				if isAdoptable(sb) == nil {
+					hash := sb.Labels[sandboxTemplateRefHash]
+					key := queue.SandboxKey{Namespace: sb.Namespace, Name: sb.Name}
+					warmSandboxQueue.Add(hash, key)
+				}
+			}
+		}
+
 		reconciler := &SandboxClaimReconciler{
-			Client:   fakeClient,
-			Scheme:   scheme,
-			Recorder: events.NewFakeRecorder(10),
-			Tracer:   asmetrics.NewNoOp(),
+			Client:           fakeClient,
+			Scheme:           scheme,
+			Recorder:         events.NewFakeRecorder(10),
+			Tracer:           asmetrics.NewNoOp(),
+			WarmSandboxQueue: warmSandboxQueue,
 		}
 
 		req := reconcile.Request{
