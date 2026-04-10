@@ -71,7 +71,8 @@ class TestAsyncK8sHelperCreateSandboxClaim(unittest.IsolatedAsyncioTestCase):
         body = call_kwargs["body"]
         self.assertEqual(body["spec"]["lifecycle"], lifecycle)
         self.assertEqual(body["metadata"]["labels"], {"agent": "test"})
-        self.assertEqual(body["metadata"]["annotations"], {"key": "val"})
+        self.assertEqual(body["metadata"]["annotations"]["key"], "val")
+        self.assertIn("agents.x-k8s.io/client-request-time", body["metadata"]["annotations"])
 
 
 class TestAsyncK8sHelperResolveSandboxName(unittest.IsolatedAsyncioTestCase):
@@ -102,16 +103,16 @@ class TestAsyncK8sHelperResolveSandboxName(unittest.IsolatedAsyncioTestCase):
                 }
             }
         }
-        
+
         async def mock_stream(*args, **kwargs):
             yield mock_event
-            
+
         mock_watch.stream = mock_stream
         mock_watch_class.return_value = mock_watch
-        
+
         with self.assertRaises(SandboxTemplateNotFoundError) as context:
             await self.helper.resolve_sandbox_name("test-claim", "default", timeout=5)
-            
+
         self.assertIn("Template 'non-existent-template' not found", str(context.exception))
 
     @patch("k8s_agent_sandbox.async_k8s_helper.watch.Watch")
@@ -124,16 +125,16 @@ class TestAsyncK8sHelperResolveSandboxName(unittest.IsolatedAsyncioTestCase):
                 "metadata": {"name": "test-claim"}
             }
         }
-        
+
         async def mock_stream(*args, **kwargs):
             yield mock_event
-            
+
         mock_watch.stream = mock_stream
         mock_watch_class.return_value = mock_watch
-        
+
         with self.assertRaises(SandboxMetadataError) as context:
             await self.helper.resolve_sandbox_name("test-claim", "default", timeout=5)
-            
+
         self.assertIn("SandboxClaim 'test-claim' was deleted while resolving sandbox name", str(context.exception))
 
 if __name__ == "__main__":

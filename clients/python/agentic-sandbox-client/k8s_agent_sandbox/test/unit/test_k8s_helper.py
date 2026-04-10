@@ -37,7 +37,8 @@ class TestK8sHelperCreateSandboxClaim(unittest.TestCase):
 
         mock_api.create_namespaced_custom_object.assert_called_once()
         body = mock_api.create_namespaced_custom_object.call_args.kwargs["body"]
-        self.assertEqual(body["metadata"]["annotations"], {"opentelemetry.io/trace-context": "trace-data"})
+        self.assertEqual(body["metadata"]["annotations"]["opentelemetry.io/trace-context"], "trace-data")
+        self.assertIn("agents.x-k8s.io/client-request-time", body["metadata"]["annotations"])
         self.assertEqual(body["metadata"]["labels"], {"agent": "code-agent", "team": "platform"})
 
     def test_labels_only_no_annotations(self, mock_config, mock_api_cls, mock_core_cls):
@@ -51,7 +52,7 @@ class TestK8sHelperCreateSandboxClaim(unittest.TestCase):
         )
 
         body = mock_api.create_namespaced_custom_object.call_args.kwargs["body"]
-        self.assertEqual(body["metadata"]["annotations"], {})
+        self.assertEqual(list(body["metadata"]["annotations"].keys()), ["agents.x-k8s.io/client-request-time"])
         self.assertEqual(body["metadata"]["labels"], {"agent": "code-agent"})
 
     def test_no_labels_no_annotations(self, mock_config, mock_api_cls, mock_core_cls):
@@ -62,7 +63,7 @@ class TestK8sHelperCreateSandboxClaim(unittest.TestCase):
         helper.create_sandbox_claim("test-claim", "test-template", "test-namespace")
 
         body = mock_api.create_namespaced_custom_object.call_args.kwargs["body"]
-        self.assertEqual(body["metadata"]["annotations"], {})
+        self.assertEqual(list(body["metadata"]["annotations"].keys()), ["agents.x-k8s.io/client-request-time"])
         self.assertNotIn("labels", body["metadata"])
 
     def test_lifecycle_included_in_manifest(self, mock_config, mock_api_cls, mock_core_cls):
@@ -136,15 +137,15 @@ class TestK8sHelperResolveSandboxName(unittest.TestCase):
                 "metadata": {"name": "test-claim"}
             }
         }
-        
+
         mock_watch.stream.return_value = [mock_event]
         mock_watch_class.return_value = mock_watch
-        
+
         helper = K8sHelper()
-        
+
         with self.assertRaises(SandboxMetadataError) as context:
             helper.resolve_sandbox_name("test-claim", "default", timeout=5)
-            
+
         self.assertIn("SandboxClaim 'test-claim' was deleted while resolving sandbox name", str(context.exception))
 
 

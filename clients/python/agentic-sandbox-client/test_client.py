@@ -29,16 +29,16 @@ from k8s_agent_sandbox.models import (
 from k8s_agent_sandbox.sandbox import Sandbox
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
- 
+
 def run_sandbox_tests(sandbox: Sandbox):
     """Tests methods on the Sandbox object (execution, files, etc)."""
-    
+
     print("\n--- Testing Sandbox Status ---")
     status, message = sandbox.status()
     print(f"Status: {status}, Message: '{message}'")
     assert status == "SandboxReady", f"Expected 'SandboxReady', got '{status}'"
     print("--- Sandbox Status Test Passed! ---")
-    
+
     print("\n--- Testing Command Execution ---")
     command_to_run = "echo 'Hello from the sandbox shruti!'"
     print(f"Executing command: '{command_to_run}'")
@@ -67,7 +67,7 @@ def run_sandbox_tests(sandbox: Sandbox):
 
     print(f"Read content: '{read_content}'")
     assert read_content == file_content
-    
+
     print("--- File Operations Test Passed! ---")
 
     # Test list and exists
@@ -103,19 +103,18 @@ def run_sandbox_tests(sandbox: Sandbox):
     print(env_result.stdout)
 
     print("--- Introspection Tests Finished ---")
-    
     print("\n--- Testing Pydantic Validation ---")
-    
+
     # Test: ExecutionResult defaults (partial response)
     original_send_request = sandbox.connector.send_request
-    
+
     mock_response = MagicMock()
     mock_response.json.return_value = {} # Empty response
     sandbox.connector.send_request = MagicMock(return_value=mock_response)
-    
+
     print("Testing ExecutionResult defaults with empty response...")
     # This should not raise error because of defaults
-    res = sandbox.commands.run("echo test") 
+    res = sandbox.commands.run("echo test")
     assert res.exit_code == -1
     assert res.stdout == ""
     assert isinstance(res, ExecutionResult)
@@ -128,7 +127,7 @@ def run_sandbox_tests(sandbox: Sandbox):
         "type": "invalid_type", # Invalid literal
         "mod_time": 12345.6
     }]
-    
+
     print("Testing FileEntry validation with invalid type...")
     try:
         sandbox.files.list(".")
@@ -136,10 +135,54 @@ def run_sandbox_tests(sandbox: Sandbox):
     except RuntimeError as e:
         print(f"Caught expected RuntimeError: {e}")
         assert "Server returned invalid file entry format" in str(e)
-    
+
     # Restore original method
     sandbox.connector.send_request = original_send_request
     print("--- Pydantic Validation Tests Passed ---")
+
+
+def test_claim_annotation(client: SandboxClient, template_name: str, namespace: str):
+    print("\n--- Testing SandboxClaim Annotation ---")
+    import uuid
+    from datetime import datetime
+    from k8s_agent_sandbox.constants import CLIENT_REQUEST_TIME_ANNOTATION
+
+    claim_name = f"test-annotation-{uuid.uuid4().hex[:8]}"
+
+    # Create claim using client
+    client._create_claim(claim_name, template_name, namespace)
+
+    try:
+        # Get claim using k8s_helper
+        claim = client.k8s_helper.custom_objects_api.get_namespaced_custom_object(
+            group="extensions.agents.x-k8s.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="sandboxclaims",
+            name=claim_name
+        )
+
+        annotations = claim.get("metadata", {}).get("annotations", {})
+        print(f"Annotations: {annotations}")
+
+        assert CLIENT_REQUEST_TIME_ANNOTATION in annotations, f"Expected annotation '{CLIENT_REQUEST_TIME_ANNOTATION}' missing"
+
+        timestamp_str = annotations[CLIENT_REQUEST_TIME_ANNOTATION]
+        print(f"Timestamp: {timestamp_str}")
+
+        # Verify it can be parsed
+        assert timestamp_str.endswith('Z'), "Timestamp should end with Z"
+        try:
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            print(f"Parsed datetime: {dt}")
+        except ValueError as e:
+            raise AssertionError(f"Failed to parse timestamp '{timestamp_str}': {e}")
+
+        print("--- SandboxClaim Annotation Test Passed! ---")
+
+    finally:
+        print(f"Cleaning up claim {claim_name}...")
+        client._delete_claim(claim_name, namespace)
 
 
 def test_wrong_template_name(client: SandboxClient, namespace: str):
@@ -155,6 +198,8 @@ def test_wrong_template_name(client: SandboxClient, namespace: str):
 
 
 def run_client_tests(client: SandboxClient, template_name: str, namespace: str):
+    test_claim_annotation(client, template_name, namespace)
+
     test_wrong_template_name(client, namespace)
 
     print(f"Creating sandbox with template '{template_name}' in namespace '{namespace}'...")
@@ -192,9 +237,9 @@ def run_client_tests(client: SandboxClient, template_name: str, namespace: str):
     print("\n--- Testing Termination and Get ---")
     print(f"Terminating sandbox {sandbox.claim_name}...")
     sandbox.terminate()
-    
+
     client.delete_sandbox(sandbox.claim_name, namespace=namespace)
-    
+
     print(f"Attempting to get terminated sandbox {sandbox.claim_name}...")
     # Wait for K8s to fully delete the resource
     start_time = time.monotonic()
@@ -209,7 +254,7 @@ def run_client_tests(client: SandboxClient, template_name: str, namespace: str):
             print(f"Caught expected RuntimeError: {e}")
             assert "not found" in str(e)
             break
-            
+
     print("\n--- Verifying Sandbox Status after termination ---")
     status, message = sandbox.status()
     print(f"Status: {status}, Message: '{message}'")
@@ -219,14 +264,14 @@ def run_client_tests(client: SandboxClient, template_name: str, namespace: str):
     print("\n--- Testing delete_all ---")
     # Ensure sandbox2 is still active
     assert (sandbox2.namespace, sandbox2.claim_name) in client.list_active_sandboxes()
-    
+
     print("Calling client.delete_all()...")
     client.delete_all()
-    
+
     # Verify client registry is empty
     active_sandboxes_after = client.list_active_sandboxes()
     assert len(active_sandboxes_after) == 0, f"Expected 0 active sandboxes, got {active_sandboxes_after}"
-    
+
     # Verify sandbox2 state
     assert not sandbox2.is_active, "Sandbox 2 should be marked inactive"
     assert sandbox2.commands is None, "Sandbox 2 commands engine should be None"
