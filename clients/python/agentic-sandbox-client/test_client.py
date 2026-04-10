@@ -142,7 +142,53 @@ def run_sandbox_tests(sandbox: Sandbox):
     print("--- Pydantic Validation Tests Passed ---")
 
 
+def test_claim_annotation(client: SandboxClient, template_name: str, namespace: str):
+    print("\n--- Testing SandboxClaim Annotation ---")
+    import uuid
+    from datetime import datetime
+    from k8s_agent_sandbox.constants import CLIENT_REQUEST_TIME_ANNOTATION
+    
+    claim_name = f"test-annotation-{uuid.uuid4().hex[:8]}"
+    
+    # Create claim using client
+    client._create_claim(claim_name, template_name, namespace)
+    
+    try:
+        # Get claim using k8s_helper
+        claim = client.k8s_helper.custom_objects_api.get_namespaced_custom_object(
+            group="extensions.agents.x-k8s.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="sandboxclaims",
+            name=claim_name
+        )
+        
+        annotations = claim.get("metadata", {}).get("annotations", {})
+        print(f"Annotations: {annotations}")
+        
+        assert CLIENT_REQUEST_TIME_ANNOTATION in annotations, f"Expected annotation '{CLIENT_REQUEST_TIME_ANNOTATION}' missing"
+        
+        timestamp_str = annotations[CLIENT_REQUEST_TIME_ANNOTATION]
+        print(f"Timestamp: {timestamp_str}")
+        
+        # Verify it can be parsed
+        assert timestamp_str.endswith('Z'), "Timestamp should end with Z"
+        try:
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            print(f"Parsed datetime: {dt}")
+        except ValueError as e:
+            raise AssertionError(f"Failed to parse timestamp '{timestamp_str}': {e}")
+            
+        print("--- SandboxClaim Annotation Test Passed! ---")
+        
+    finally:
+        print(f"Cleaning up claim {claim_name}...")
+        client._delete_claim(claim_name, namespace)
+
+
 def run_client_tests(client: SandboxClient, template_name: str, namespace: str):
+    test_claim_annotation(client, template_name, namespace)
+    
     print(f"Creating sandbox with template '{template_name}' in namespace '{namespace}'...")
     sandbox = client.create_sandbox(template_name, namespace=namespace)
     print(f"Sandbox created with claim name: {sandbox.claim_name}")

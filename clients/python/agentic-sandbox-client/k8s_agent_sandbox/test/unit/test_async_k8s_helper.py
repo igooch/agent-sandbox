@@ -70,7 +70,8 @@ class TestAsyncK8sHelperCreateSandboxClaim(unittest.IsolatedAsyncioTestCase):
         body = call_kwargs["body"]
         self.assertEqual(body["spec"]["lifecycle"], lifecycle)
         self.assertEqual(body["metadata"]["labels"], {"agent": "test"})
-        self.assertEqual(body["metadata"]["annotations"], {"key": "val"})
+        self.assertIn("agents.x-k8s.io/client-request-time", body["metadata"]["annotations"])
+        self.assertEqual(body["metadata"]["annotations"]["key"], "val")
 
 
 if __name__ == "__main__":

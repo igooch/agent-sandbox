@@ -17,6 +17,7 @@ import time
 from typing import List
 from kubernetes import client, config, watch
 from .exceptions import SandboxMetadataError, SandboxNotFoundError
+from .constants import CLIENT_REQUEST_TIME_ANNOTATION
 
 # Constants for API Groups and Resources
 CLAIM_API_GROUP = "extensions.agents.x-k8s.io"
@@ -44,9 +45,15 @@ class K8sHelper:
 
     def create_sandbox_claim(self, name: str, template: str, namespace: str, annotations: dict | None = None, labels: dict | None = None, lifecycle: dict | None = None):
         """Creates a SandboxClaim custom resource."""
+        from datetime import datetime
+        
+        updated_annotations = annotations or {}
+        if CLIENT_REQUEST_TIME_ANNOTATION not in updated_annotations:
+            updated_annotations[CLIENT_REQUEST_TIME_ANNOTATION] = datetime.utcnow().isoformat() + "Z"
+
         metadata = {
             "name": name,
-            "annotations": annotations or {},
+            "annotations": updated_annotations,
         }
         if labels:
             metadata["labels"] = labels
