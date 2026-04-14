@@ -1158,16 +1158,34 @@ func TestRecordCreationLatencyMetric(t *testing.T) {
 		setupReconciler                func(r *SandboxClaimReconciler)
 	}{
 		{
-			name: "records success on first ready transition",
+			name: "records success on first ready transition (with webhook annotation)",
 			claim: &extensionsv1alpha1.SandboxClaim{
-				ObjectMeta: metav1.ObjectMeta{Name: "new-ready", CreationTimestamp: pastTime},
-				Spec:       extensionsv1alpha1.SandboxClaimSpec{TemplateRef: extensionsv1alpha1.SandboxTemplateRef{Name: "tpl"}},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "new-ready",
+					CreationTimestamp: pastTime,
+					Annotations: map[string]string{
+						asmetrics.WebhookAnnotation: time.Now().Add(-5 * time.Second).Format(time.RFC3339Nano),
+					},
+				},
+				Spec: extensionsv1alpha1.SandboxClaimSpec{TemplateRef: extensionsv1alpha1.SandboxTemplateRef{Name: "tpl"}},
 				Status: extensionsv1alpha1.SandboxClaimStatus{
 					Conditions: []metav1.Condition{{Type: string(sandboxv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue}},
 				},
 			},
 			oldStatus:            &extensionsv1alpha1.SandboxClaimStatus{},
 			expectedObservations: 1,
+		},
+		{
+			name: "skips recording when webhook annotation is missing",
+			claim: &extensionsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "webhook-missing", CreationTimestamp: pastTime},
+				Spec:       extensionsv1alpha1.SandboxClaimSpec{TemplateRef: extensionsv1alpha1.SandboxTemplateRef{Name: "tpl"}},
+				Status: extensionsv1alpha1.SandboxClaimStatus{
+					Conditions: []metav1.Condition{{Type: string(sandboxv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue}},
+				},
+			},
+			oldStatus:            &extensionsv1alpha1.SandboxClaimStatus{},
+			expectedObservations: 0,
 		},
 		{
 			name: "ignores ready condition = false",
@@ -1197,8 +1215,14 @@ func TestRecordCreationLatencyMetric(t *testing.T) {
 		{
 			name: "uses unknown launch type when sandbox is nil",
 			claim: &extensionsv1alpha1.SandboxClaim{
-				ObjectMeta: metav1.ObjectMeta{Name: "unknown", CreationTimestamp: pastTime},
-				Spec:       extensionsv1alpha1.SandboxClaimSpec{TemplateRef: extensionsv1alpha1.SandboxTemplateRef{Name: "tpl"}},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "unknown",
+					CreationTimestamp: pastTime,
+					Annotations: map[string]string{
+						asmetrics.WebhookAnnotation: time.Now().Add(-5 * time.Second).Format(time.RFC3339Nano),
+					},
+				},
+				Spec: extensionsv1alpha1.SandboxClaimSpec{TemplateRef: extensionsv1alpha1.SandboxTemplateRef{Name: "tpl"}},
 				Status: extensionsv1alpha1.SandboxClaimStatus{
 					Conditions: []metav1.Condition{{Type: string(sandboxv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue, Reason: "Unknown"}},
 				},
@@ -1216,6 +1240,7 @@ func TestRecordCreationLatencyMetric(t *testing.T) {
 					CreationTimestamp: pastTime,
 					Annotations: map[string]string{
 						asmetrics.ObservabilityAnnotation: time.Now().Add(-5 * time.Second).Format(time.RFC3339Nano),
+						asmetrics.WebhookAnnotation:       time.Now().Add(-5 * time.Second).Format(time.RFC3339Nano),
 					},
 				},
 				Spec: extensionsv1alpha1.SandboxClaimSpec{TemplateRef: extensionsv1alpha1.SandboxTemplateRef{Name: "tpl"}},
@@ -1279,7 +1304,7 @@ func TestClientClaimLatencyMetric(t *testing.T) {
 					Namespace:         "default",
 					CreationTimestamp: pastTime,
 					Annotations: map[string]string{
-						asmetrics.ClientRequestTimeAnnotation: time.Now().Add(-5 * time.Second).Format(time.RFC3339Nano),
+						asmetrics.ClientAnnotation: time.Now().Add(-5 * time.Second).Format(time.RFC3339Nano),
 					},
 				},
 				Spec: extensionsv1alpha1.SandboxClaimSpec{TemplateRef: extensionsv1alpha1.SandboxTemplateRef{Name: "tpl"}},

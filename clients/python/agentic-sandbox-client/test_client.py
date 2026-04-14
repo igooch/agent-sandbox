@@ -145,7 +145,7 @@ def test_claim_annotation(client: SandboxClient, template_name: str, namespace: 
     print("\n--- Testing SandboxClaim Annotation ---")
     import uuid
     from datetime import datetime
-    from k8s_agent_sandbox.constants import CLIENT_REQUEST_TIME_ANNOTATION
+    from k8s_agent_sandbox.constants import CLIENT_ANNOTATION
 
     claim_name = f"test-annotation-{uuid.uuid4().hex[:8]}"
 
@@ -165,9 +165,9 @@ def test_claim_annotation(client: SandboxClient, template_name: str, namespace: 
         annotations = claim.get("metadata", {}).get("annotations", {})
         print(f"Annotations: {annotations}")
 
-        assert CLIENT_REQUEST_TIME_ANNOTATION in annotations, f"Expected annotation '{CLIENT_REQUEST_TIME_ANNOTATION}' missing"
+        assert CLIENT_ANNOTATION in annotations, f"Expected annotation '{CLIENT_ANNOTATION}' missing"
 
-        timestamp_str = annotations[CLIENT_REQUEST_TIME_ANNOTATION]
+        timestamp_str = annotations[CLIENT_ANNOTATION]
         print(f"Timestamp: {timestamp_str}")
 
         # Verify it can be parsed

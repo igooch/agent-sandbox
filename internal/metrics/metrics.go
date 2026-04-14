@@ -30,11 +30,14 @@ const (
 	LaunchTypeCold    = "cold"    // Pod not from a SandboxWarmPool
 	LaunchTypeUnknown = "unknown" // Used when Sandbox is nil during failure
 
-	// ClientRequestTimeAnnotation is the annotation key for the client request time.
-	ClientRequestTimeAnnotation = "agents.x-k8s.io/client-request-time"
+	// ClientAnnotation is the annotation key for the client request time.
+	ClientAnnotation = "agents.x-k8s.io/client-first-requested-at"
 
 	// ObservabilityAnnotation is the annotation key for the time the controller first observed the claim.
 	ObservabilityAnnotation = "agents.x-k8s.io/controller-first-observed-at"
+
+	// WebhookAnnotation is the annotation key for the time the webhook first saw the claim.
+	WebhookAnnotation = "agents.x-k8s.io/webhook-first-observed-at"
 )
 
 var (

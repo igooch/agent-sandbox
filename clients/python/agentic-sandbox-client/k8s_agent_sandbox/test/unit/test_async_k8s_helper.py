@@ -72,7 +72,7 @@ class TestAsyncK8sHelperCreateSandboxClaim(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["spec"]["lifecycle"], lifecycle)
         self.assertEqual(body["metadata"]["labels"], {"agent": "test"})
         self.assertEqual(body["metadata"]["annotations"]["key"], "val")
-        self.assertIn("agents.x-k8s.io/client-request-time", body["metadata"]["annotations"])
+        self.assertIn("agents.x-k8s.io/client-first-requested-at", body["metadata"]["annotations"])
 
 
 class TestAsyncK8sHelperResolveSandboxName(unittest.IsolatedAsyncioTestCase):

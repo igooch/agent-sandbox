@@ -17,7 +17,7 @@ import time
 from typing import List
 from kubernetes import client, config, watch
 from .exceptions import SandboxMetadataError, SandboxNotFoundError, SandboxTemplateNotFoundError
-from .constants import CLIENT_REQUEST_TIME_ANNOTATION
+from .constants import CLIENT_ANNOTATION
 
 # Constants for API Groups and Resources
 CLAIM_API_GROUP = "extensions.agents.x-k8s.io"
@@ -48,8 +48,8 @@ class K8sHelper:
         from datetime import datetime
 
         updated_annotations = annotations or {}
-        if CLIENT_REQUEST_TIME_ANNOTATION not in updated_annotations:
-            updated_annotations[CLIENT_REQUEST_TIME_ANNOTATION] = datetime.utcnow().isoformat() + "Z"
+        if CLIENT_ANNOTATION not in updated_annotations:
+            updated_annotations[CLIENT_ANNOTATION] = datetime.utcnow().isoformat() + "Z"
 
         metadata = {
             "name": name,

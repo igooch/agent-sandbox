@@ -134,7 +134,7 @@ func (h *K8sHelper) createClaim(ctx context.Context, namespace, templateName str
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations[asmetrics.ClientRequestTimeAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
+	annotations[asmetrics.ClientAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
 
 	claim := &extv1alpha1.SandboxClaim{
 		ObjectMeta: metav1.ObjectMeta{
