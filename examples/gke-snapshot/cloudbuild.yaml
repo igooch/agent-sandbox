@@ -1,0 +1,5 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'REGION-docker.pkg.dev/PROJECT_ID/agent-sandbox/sandbox-client:latest', '-f', 'Dockerfile.client', '.']
+images:
+- 'REGION-docker.pkg.dev/PROJECT_ID/agent-sandbox/sandbox-client:latest'

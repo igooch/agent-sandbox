@@ -1,0 +1,8 @@
+apiVersion: podsnapshot.gke.io/v1alpha1
+kind: PodSnapshotStorageConfig
+metadata:
+  name: example-pod-snapshot-storage-config
+spec:
+  snapshotStorageConfig:
+    gcs:
+      bucket: "PROJECT_ID_snapshots"

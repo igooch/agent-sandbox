@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: agent-sandbox-client-pod
+  namespace: default
+spec:
+  serviceAccountName: agent-sandbox-client-sa
+  containers:
+  - name: client
+    image: REGION-docker.pkg.dev/PROJECT_ID/agent-sandbox/sandbox-client:latest
+    imagePullPolicy: Always
+  restartPolicy: Never

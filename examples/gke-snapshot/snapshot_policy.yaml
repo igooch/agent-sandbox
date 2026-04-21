@@ -1,0 +1,18 @@
+apiVersion: podsnapshot.gke.io/v1alpha1
+kind: PodSnapshotPolicy
+metadata:
+  name: example-pod-snapshot-policy
+  namespace: default
+spec:
+  storageConfigName: example-pod-snapshot-storage-config
+  selector:
+    matchLabels:
+      app: agent-sandbox-workload
+  triggerConfig:
+    type: manual
+    postCheckpoint: resume
+  snapshotGroupingRules:
+    groupByLabelValue:
+      labels: ["tenant-id", "user-id"]
+      groupRetentionPolicy:
+        maxSnapshotCountPerGroup: 2

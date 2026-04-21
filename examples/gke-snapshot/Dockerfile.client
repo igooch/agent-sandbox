@@ -1,0 +1,11 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Install SDK from version 0.3.10 with tracing
+RUN pip install "k8s-agent-sandbox[tracing]==0.3.10"
+
+# Copy test script
+COPY client_test.py /app/client_test.py
+
+CMD ["python", "/app/client_test.py"]
